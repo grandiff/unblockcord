@@ -17,16 +17,29 @@ from app.config import (
 
 def check_discord_connectivity() -> tuple[bool, float]:
     """
-    Discord'a TCP bağlantısı kurarak erişilebilirliği ölçer.
+    Discord'a TCP baglanabilirligini olcer.
+    Proxy map'ten gercek Cloudflare IP'sini kullanir
+    (hosts dosyasi 127.0.0.1 gosterdigi icin).
 
     Returns:
-        (başarılı: bool, gecikme_ms: float)
-        Başarısız olursa gecikme -1.0 döner.
+        (basarili: bool, gecikme_ms: float)
+        Basarisiz olursa gecikme -1.0 doner.
     """
+    # Gercek IP'yi proxy map'ten bul
+    target = CONNECTIVITY_TEST_DOMAIN
+    try:
+        from app.core.sni_proxy import get_proxy
+        proxy = get_proxy()
+        real_ip = proxy._ip_map.get(target)
+        if real_ip:
+            target = real_ip
+    except Exception:
+        pass
+
     start = time.monotonic()
     try:
         sock = socket.create_connection(
-            (CONNECTIVITY_TEST_DOMAIN, CONNECTIVITY_TEST_PORT),
+            (target, CONNECTIVITY_TEST_PORT),
             timeout=CONNECTIVITY_TIMEOUT,
         )
         sock.close()

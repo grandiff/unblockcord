@@ -17,13 +17,15 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSlot, QSize
 from PyQt6.QtGui  import QIcon, QFont, QColor, QPixmap
 
-from app.config              import DOMAINS, INTERVALS, load_settings, save_settings
-from app.core.daemon         import DaemonThread, UpdateResult
-from app.core.hosts_manager  import restore_hosts
+from app.config               import DOMAINS, INTERVALS, load_settings, save_settings
+from app.core.daemon          import DaemonThread, UpdateResult
+from app.core.hosts_manager   import restore_hosts
 from app.core.discord_manager import restart_discord
-from app.core.sni_proxy      import get_proxy
-from app.ui.styles           import MAIN_STYLESHEET, COLORS
-from app.ui.tray_icon        import TrayIcon
+from app.core.sni_proxy       import get_proxy
+from app.core.autostart       import is_autostart_enabled, set_autostart
+from app.core.watchdog        import WatchdogThread
+from app.ui.styles            import MAIN_STYLESHEET, COLORS
+from app.ui.tray_icon         import TrayIcon
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -103,7 +105,7 @@ class LogPanel(QTextEdit):
 class MainWindow(QMainWindow):
     """UnblockCord ana uygulama penceresi."""
 
-    APP_VERSION = "1.0.0"
+    APP_VERSION = "1.1.0"
 
     def __init__(self):
         super().__init__()
@@ -112,6 +114,7 @@ class MainWindow(QMainWindow):
 
         self._init_window()
         self._init_daemon()
+        self._init_watchdog()
         self._build_ui()
         self._init_tray()
         self._apply_initial_settings()
@@ -145,6 +148,13 @@ class MainWindow(QMainWindow):
         self.daemon.set_interval(self.settings.get("interval", "6 Saat (Önerilen)"))
         self.daemon.start()
 
+    def _init_watchdog(self):
+        self.watchdog = WatchdogThread(self)
+        self.watchdog.connection_lost.connect(self._on_connection_lost)
+        self.watchdog.connection_restored.connect(self._on_connection_restored)
+        self.watchdog.reconnect_needed.connect(self.daemon.trigger_update)
+        self.watchdog.start()
+
     def _init_tray(self):
         self.tray = TrayIcon(self)
         self.tray.show_window.connect(self._show_and_raise)
@@ -161,6 +171,9 @@ class MainWindow(QMainWindow):
         auto_restart = self.settings.get("auto_restart_discord", False)
         self.auto_restart_chk.setChecked(auto_restart)
         self.daemon.set_auto_restart_discord(auto_restart)
+
+        autostart = is_autostart_enabled()
+        self.autostart_chk.setChecked(autostart)
 
     # ─── UI inşası ───────────────────────────────────────────────────────
 
@@ -401,12 +414,24 @@ class MainWindow(QMainWindow):
         row.addStretch()
 
         # Otomatik restart toggle
-        self.auto_restart_chk = QCheckBox("Güncellemeden sonra Discord'u yeniden başlat")
+        self.auto_restart_chk = QCheckBox("Discord'u yeniden başlat")
         self.auto_restart_chk.setStyleSheet(
             f"color:{COLORS['text_secondary']}; font-size:12px;"
         )
+        self.auto_restart_chk.setToolTip("Güncelleme sonrası Discord'u otomatik yeniden başlat")
         self.auto_restart_chk.toggled.connect(self._on_auto_restart_toggled)
         row.addWidget(self.auto_restart_chk)
+
+        row.addSpacing(6)
+
+        # Windows ile başlat toggle
+        self.autostart_chk = QCheckBox("Windows ile başlat")
+        self.autostart_chk.setStyleSheet(
+            f"color:{COLORS['text_secondary']}; font-size:12px;"
+        )
+        self.autostart_chk.setToolTip("Bilgisayar açılınca UnblockCord otomatik başlasın")
+        self.autostart_chk.toggled.connect(self._on_autostart_toggled)
+        row.addWidget(self.autostart_chk)
 
         row.addSpacing(10)
 
@@ -589,19 +614,59 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot()
     def _on_quit(self):
+        self.watchdog.stop()
         self.daemon.stop()
         QApplication.quit()
+
+    @pyqtSlot(bool)
+    def _on_autostart_toggled(self, checked: bool):
+        ok = set_autostart(checked)
+        state = "etkinleştirildi" if checked else "devre dışı bırakıldı"
+        level = "success" if ok else "warning"
+        msg   = f"Windows başlangıcı {state}." if ok else "Autostart ayarlanamadı."
+        self.log_panel.append_log(msg, level)
+
+    @pyqtSlot()
+    def _on_connection_lost(self):
+        self.status_dot.set("disconnected")
+        self.status_label.setText("Bağlantı Kesildi  ✗")
+        self.tray.set_status("disconnected")
+        self.tray.show_message(
+            "UnblockCord — Bağlantı Kesildi",
+            "Discord'a ulaşılamıyor. Otomatik onarılıyor...",
+        )
+        self.log_panel.append_log(
+            "Bağlantı kesildi, otomatik yeniden bağlanılıyor...", "warning"
+        )
+
+    @pyqtSlot(float)
+    def _on_connection_restored(self, latency: float):
+        self.status_dot.set("connected")
+        self.status_label.setText("Discord Erişilebilir  ✓")
+        self.tray.set_status("connected")
+        self.tray.show_message(
+            "UnblockCord — Bağlantı Yenilendi",
+            f"Discord'a bağlantı yeniden kuruldu. Ping: {latency} ms",
+        )
+        self.log_panel.append_log(
+            f"Bağlantı geri geldi. Ping: {latency} ms", "success"
+        )
 
     # ═══════════════════════════════════════════════════════════════════
     # Pencere olayları
     # ═══════════════════════════════════════════════════════════════════
 
     def closeEvent(self, event):
-        """X tuşu → tepsiye küçült."""
-        event.ignore()
-        self.hide()
-        self.tray.show_message(
-            "UnblockCord",
-            "Uygulama arka planda çalışmaya devam ediyor. "
-            "Çıkmak için tepsi ikonuna sağ tıklayın.",
-        )
+        """X tuşu → ilk kapamada tepsi bildirimi, ikincide tam çıkış."""
+        if not hasattr(self, '_close_once'):
+            self._close_once = True
+            event.ignore()
+            self.hide()
+            self.tray.show_message(
+                "UnblockCord — Arka planda çalışıyor",
+                "Discord bypass aktif. Çıkmak için tepsi ikonu → Çıkış.",
+            )
+        else:
+            # ikinci kapat → tam çıkış
+            self._on_quit()
+            event.accept()
