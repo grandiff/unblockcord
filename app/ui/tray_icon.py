@@ -50,7 +50,7 @@ class TrayIcon(QSystemTrayIcon):
         open_action   = menu.addAction("📊  Pencereyi Aç")
         update_action = menu.addAction("▶   Şimdi Güncelle")
         menu.addSeparator()
-        quit_action   = menu.addAction("✕   Çıkış")
+        quit_action   = menu.addAction("✕   Kapat")
 
         open_action.triggered.connect(self.show_window)
         update_action.triggered.connect(self.trigger_update)

@@ -657,16 +657,10 @@ class MainWindow(QMainWindow):
     # ═══════════════════════════════════════════════════════════════════
 
     def closeEvent(self, event):
-        """X tuşu → ilk kapamada tepsi bildirimi, ikincide tam çıkış."""
-        if not hasattr(self, '_close_once'):
-            self._close_once = True
-            event.ignore()
-            self.hide()
-            self.tray.show_message(
-                "UnblockCord — Arka planda çalışıyor",
-                "Discord bypass aktif. Çıkmak için tepsi ikonu → Çıkış.",
-            )
-        else:
-            # ikinci kapat → tam çıkış
-            self._on_quit()
-            event.accept()
+        """X tuşu → her zaman tepsiye küçült. Kapamak için tepsi → Kapat."""
+        event.ignore()
+        self.hide()
+        self.tray.show_message(
+            "UnblockCord — Arka planda çalışıyor",
+            "Discord bypass aktif. Kapatmak için tepsi ikonu → sağ tık → Kapat.",
+        )
